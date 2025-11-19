@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup folder
+extension copy/
+
+# Test files
+tests/
+
+# Settings export
+*.json
+!manifest.json
+
+# Logs
+*.log

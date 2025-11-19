@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Network JSON Saver",
+  "version": "1.0",
+  "description": "Save Network JSON responses with filtering.",
+  "permissions": [
+    "debugger",
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Network JSON Saver"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

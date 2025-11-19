@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network JSON Saver</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <div class="container">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="main">메인</button>
+      <button class="tab-btn" data-tab="list">목록</button>
+      <button class="tab-btn" data-tab="settings">설정</button>
+    </div>
+
+    <!-- Main Tab -->
+    <div id="main" class="tab-content active">
+      <div class="status-section">
+        <h2 id="status-text">대기 중</h2>
+        <label class="switch">
+          <input type="checkbox" id="toggle-recording">
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="control-group">
+        <h3>저장 모드</h3>
+        <label><input type="radio" name="mode" value="auto" checked> 자동 저장 (즉시 다운로드)</label>
+        <label><input type="radio" name="mode" value="manual"> 수동 저장 (목록에 추가)</label>
+      </div>
+
+      <div class="control-group">
+        <h3>필터 설정</h3>
+        <label class="checkbox-label">
+          <input type="checkbox" id="smart-filter">
+          <span>스마트 필터 (로그, 알림, 메뉴 제외)</span>
+        </label>
+      </div>
+
+      <div class="control-group">
+        <h3>파일명 접두사</h3>
+        <input type="text" id="filename-prefix" placeholder="예: login_test">
+      </div>
+    </div>
+
+    <!-- List Tab (Manual Mode) -->
+    <div id="list" class="tab-content">
+      <div class="list-header">
+        <button id="save-all-btn">전체 저장</button>
+        <button id="clear-list-btn">목록 비우기</button>
+      </div>
+      <ul id="captured-list">
+        <!-- Captured items will be added here -->
+        <li class="empty-msg">캡처된 데이터가 없습니다.</li>
+      </ul>
+    </div>
+
+    <!-- Settings Tab -->
+    <div id="settings" class="tab-content">
+      <div class="setting-group">
+        <h3>Whitelist (포함할 단어)</h3>
+        <div class="input-row">
+          <input type="text" id="whitelist-input" placeholder="예: wehago">
+          <button id="add-whitelist">추가</button>
+        </div>
+        <ul id="whitelist-items" class="tag-list"></ul>
+      </div>
+
+      <div class="setting-group">
+        <h3>Blacklist (제외할 단어)</h3>
+        <div class="input-row">
+          <input type="text" id="blacklist-input" placeholder="예: google">
+          <button id="add-blacklist">추가</button>
+        </div>
+        <ul id="blacklist-items" class="tag-list"></ul>
+      </div>
+      <div class="setting-group">
+        <h3>데이터 관리</h3>
+        <div class="input-row">
+          <button id="export-btn" style="background-color: #4CAF50;">설정 내보내기 (JSON)</button>
+          <button id="import-btn" style="background-color: #FF9800;">설정 가져오기</button>
+          <input type="file" id="import-file" accept=".json" style="display: none;">
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+
+</html>
