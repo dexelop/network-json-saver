@@ -303,12 +303,14 @@ async function onDebuggerEvent(source, method, params) {
 
     // Blacklist check
     if (settings.blacklist && settings.blacklist.length > 0) {
-      const hit = settings.blacklist.some(b => url.includes(b));
-      if (hit) {
-        console.log(`[Skip] Blacklist hit: ${url}`);
+      console.log(`[Filter] Checking blacklist:`, settings.blacklist, 'against URL:', url);
+      const matchedPattern = settings.blacklist.find(b => url.includes(b));
+      if (matchedPattern) {
+        console.log(`[Filter] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched URL: ${url}`);
         pendingRequests.delete(requestId);
         return;
       }
+      console.log(`[Filter] ❌ No blacklist match for: ${url}`);
     }
 
     console.log(`[Queue] Request ${requestId} passed filters: ${url}`);
@@ -352,8 +354,19 @@ async function onDebuggerEvent(source, method, params) {
 
 async function processCapturedData(url, body, timestamp) {
   console.log(`[ProcessData] Processing: ${url}`);
-  const settings = await chrome.storage.local.get(['mode', 'filenamePrefix', 'capturedRequests', 'whitelist']);
-  console.log(`[ProcessData] Mode: ${settings.mode}, Whitelist:`, settings.whitelist);
+  const settings = await chrome.storage.local.get(['mode', 'filenamePrefix', 'capturedRequests', 'whitelist', 'blacklist']);
+  console.log(`[ProcessData] Mode: ${settings.mode}, Whitelist:`, settings.whitelist, 'Blacklist:', settings.blacklist);
+
+  // Double-check Blacklist (Race condition protection)
+  if (settings.blacklist && settings.blacklist.length > 0) {
+    console.log(`[ProcessData] Checking blacklist:`, settings.blacklist, 'against URL:', url);
+    const matchedPattern = settings.blacklist.find(b => url.includes(b));
+    if (matchedPattern) {
+      console.log(`[ProcessData] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched URL: ${url}`);
+      return; // Skip this request
+    }
+    console.log(`[ProcessData] ❌ No blacklist match for: ${url}`);
+  }
 
   let jsonContent = body;
   try {
@@ -393,7 +406,16 @@ async function processCapturedData(url, body, timestamp) {
       downloadFile(url, jsonContent, timestamp, settings.filenamePrefix);
     } else {
       console.log(`[List] Manual mode + Not whitelisted - adding to list: ${url}`);
-      // 새로운 것은 목록에 추가 (Blacklist는 이미 앞단에서 필터링됨)
+
+      // Check for duplicates (prevent same URL from appearing multiple times)
+      const existingRequests = settings.capturedRequests || [];
+      const isDuplicate = existingRequests.some(req => req.url === url);
+
+      if (isDuplicate) {
+        console.log(`[List] Duplicate URL detected, skipping: ${url}`);
+        return;
+      }
+
       // Calculate size
       const sizeBytes = new Blob([jsonContent]).size;
       let sizeDisplay = sizeBytes + ' B';
@@ -409,7 +431,7 @@ async function processCapturedData(url, body, timestamp) {
         size: sizeDisplay
       };
 
-      let updatedList = [...(settings.capturedRequests || []), newRequest];
+      let updatedList = [...existingRequests, newRequest];
 
       // Limit list size (reduce from 50 to 20 to save space)
       const MAX_ITEMS = 20;

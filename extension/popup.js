@@ -146,6 +146,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Double-check with background script
                 chrome.runtime.sendMessage({ action: 'getRecordingStatus' }, (response) => {
+                    // Check for errors first
+                    if (chrome.runtime.lastError) {
+                        console.log('Background not ready:', chrome.runtime.lastError.message);
+                        return;
+                    }
+
                     if (response && response.isRecording !== state.isRecording) {
                         console.warn('State mismatch detected. Syncing with background...');
                         state.isRecording = response.isRecording;
