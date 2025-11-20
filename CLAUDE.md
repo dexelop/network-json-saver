@@ -84,6 +84,25 @@ if (filtered) {
 4. Smart Filter (선택적, 기본값: true) - 노이즈 제거
 5. Blacklist 체크 (차단 패턴) - 통과 못하면 Queue에서 제거
 
+**Wildcard 패턴 매칭 (v1.2)**
+
+Whitelist/Blacklist는 URL pathname에 대해 와일드카드(`*`) 패턴 매칭을 지원합니다:
+
+```javascript
+// 정확한 매칭
+"/api/users"        → "/api/users"만 매칭 (O), "/api/users/123" (X)
+
+// 와일드카드 매칭
+"/api/users/*"      → "/api/users/", "/api/users/123", "/api/users/list" 모두 매칭
+"/api/*"            → "/api/"로 시작하는 모든 것
+"*/lpevent"         → "/lpevent"로 끝나는 모든 것
+"*achilles*"        → "achilles"가 포함된 모든 것
+```
+
+**예시:**
+- Blacklist: `["/achilles/*"]` → `/achilles/lpevent`, `/achilles/data` 차단
+- Whitelist: `["/api/wehago*"]` → `/api/wehago`, `/api/wehago/list` 자동 다운로드
+
 **다운로드 시점 로직 (background.js:350-434):**
 - **Auto 모드**: Blacklist 아닌 모든 것 즉시 다운로드
 - **Manual 모드**:

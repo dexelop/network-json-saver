@@ -3,6 +3,26 @@
 let attachedTabs = new Set(); // Set of tabIds
 let pendingRequests = new Map(); // requestId -> { url, timestamp }
 
+/**
+ * Match pathname against pattern with wildcard support
+ * @param {string} pathname - URL pathname (e.g., "/api/users")
+ * @param {string} pattern - Pattern with optional wildcards (e.g., "/api/*", "*users*")
+ * @returns {boolean} - True if matched
+ *
+ * Examples:
+ *   matchPattern("/api/users", "/api/users")     → true  (exact match)
+ *   matchPattern("/api/users", "/api/*")         → true  (wildcard)
+ *   matchPattern("/api/users", "/api/user")      → false (no match)
+ *   matchPattern("/api/users", "*users*")        → true  (contains)
+ */
+function matchPattern(pathname, pattern) {
+  // Escape special regex characters except *
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  // Replace * with .*
+  const regex = new RegExp('^' + escaped.replace(/\*/g, '.*') + '$');
+  return regex.test(pathname);
+}
+
 // Initialize default settings
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(['isRecording', 'mode', 'smartFilter', 'whitelist', 'blacklist', 'filenamePrefix', 'capturedRequests'], (result) => {
@@ -301,16 +321,24 @@ async function onDebuggerEvent(source, method, params) {
       }
     }
 
-    // Blacklist check
+    // Blacklist check with wildcard support
     if (settings.blacklist && settings.blacklist.length > 0) {
       console.log(`[Filter] Checking blacklist:`, settings.blacklist, 'against URL:', url);
-      const matchedPattern = settings.blacklist.find(b => url.includes(b));
+
+      let pathname = url;
+      try {
+        pathname = new URL(url).pathname;
+      } catch (e) {
+        // Keep full URL if parsing fails
+      }
+
+      const matchedPattern = settings.blacklist.find(pattern => matchPattern(pathname, pattern));
       if (matchedPattern) {
-        console.log(`[Filter] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched URL: ${url}`);
+        console.log(`[Filter] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched pathname: ${pathname}`);
         pendingRequests.delete(requestId);
         return;
       }
-      console.log(`[Filter] ❌ No blacklist match for: ${url}`);
+      console.log(`[Filter] ❌ No blacklist match for pathname: ${pathname}`);
     }
 
     console.log(`[Queue] Request ${requestId} passed filters: ${url}`);
@@ -357,15 +385,23 @@ async function processCapturedData(url, body, timestamp) {
   const settings = await chrome.storage.local.get(['mode', 'filenamePrefix', 'capturedRequests', 'whitelist', 'blacklist']);
   console.log(`[ProcessData] Mode: ${settings.mode}, Whitelist:`, settings.whitelist, 'Blacklist:', settings.blacklist);
 
-  // Double-check Blacklist (Race condition protection)
+  // Double-check Blacklist (Race condition protection) with wildcard support
   if (settings.blacklist && settings.blacklist.length > 0) {
     console.log(`[ProcessData] Checking blacklist:`, settings.blacklist, 'against URL:', url);
-    const matchedPattern = settings.blacklist.find(b => url.includes(b));
+
+    let pathname = url;
+    try {
+      pathname = new URL(url).pathname;
+    } catch (e) {
+      // Keep full URL if parsing fails
+    }
+
+    const matchedPattern = settings.blacklist.find(pattern => matchPattern(pathname, pattern));
     if (matchedPattern) {
-      console.log(`[ProcessData] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched URL: ${url}`);
+      console.log(`[ProcessData] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched pathname: ${pathname}`);
       return; // Skip this request
     }
-    console.log(`[ProcessData] ❌ No blacklist match for: ${url}`);
+    console.log(`[ProcessData] ❌ No blacklist match for pathname: ${pathname}`);
   }
 
   let jsonContent = body;
@@ -376,15 +412,22 @@ async function processCapturedData(url, body, timestamp) {
     // Keep original
   }
 
-  // Check Whitelist
+  // Check Whitelist with wildcard support
   let isWhitelisted = false;
+  let pathname = url;
+  try {
+    pathname = new URL(url).pathname;
+  } catch (e) {
+    // Keep full URL if parsing fails
+  }
+
   if (settings.whitelist && settings.whitelist.length > 0) {
     isWhitelisted = settings.whitelist.some(w => {
-      const keyword = typeof w === 'string' ? w : w.keyword;
-      return url.includes(keyword);
+      const pattern = typeof w === 'string' ? w : w.keyword;
+      return matchPattern(pathname, pattern);
     });
   }
-  console.log(`[ProcessData] isWhitelisted: ${isWhitelisted}`);
+  console.log(`[ProcessData] isWhitelisted: ${isWhitelisted} (pathname: ${pathname})`);
 
   const isAuto = settings.mode === 'auto';
 

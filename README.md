@@ -9,9 +9,18 @@ Chrome에서 웹 개발할 때 개발자 도구(F12)의 Network 탭에서 JSON �
 - 백그라운드에서 실시간으로 네트워크 트래픽 모니터링
 
 ### 2. 스마트 필터링
-- **Whitelist**: 원하는 키워드(예: 'wehago', 'api')가 포함된 URL만 캡처
-- **Blacklist**: 특정 키워드(예: 'google', 'analytics')가 포함된 URL은 차단
+- **Whitelist**: 원하는 패턴의 URL만 캡처 (와일드카드 지원)
+- **Blacklist**: 특정 패턴의 URL 차단 (와일드카드 지원)
 - **Smart Filter**: 로그/알림/메뉴 같은 노이즈 자동 제거
+
+**와일드카드 패턴 예시:**
+```
+/api/users          → 정확히 /api/users만 매칭
+/api/users/*        → /api/users/로 시작하는 모든 것 (/api/users/123, /api/users/list)
+/api/*              → /api/로 시작하는 모든 것
+*/lpevent           → /lpevent로 끝나는 것
+*achilles*          → achilles가 포함된 모든 것
+```
 
 ### 3. 2가지 저장 모드
 - **Auto Mode**: Blacklist를 제외한 모든 JSON을 즉시 자동 다운로드
@@ -151,6 +160,20 @@ Extension은 다음 상황에서 자동으로 재연결을 시도합니다:
 ---
 
 ## 📝 버전 히스토리
+
+### v1.2 (2025-01-20) - Wildcard Pattern Support
+- ✅ **와일드카드 패턴 매칭 구현**
+  - Whitelist/Blacklist에서 `*` 와일드카드 지원
+  - URL pathname 기반 정확한 매칭
+  - 정확한 매칭: `/api/users` → `/api/users`만
+  - 와일드카드: `/api/*` → `/api/`로 시작하는 모든 것
+
+- ✅ **중복 방지 로직 추가**
+  - 같은 URL이 목록에 여러 번 추가되는 문제 해결
+
+- ✅ **Blacklist Race Condition 완전 해결**
+  - `processCapturedData`에서 blacklist 재확인
+  - popup.js 에러 핸들링 개선
 
 ### v1.1 (2025-01-20) - Stability Improvements
 - ✅ **Auto/Manual 모드 로직 수정**
