@@ -46,23 +46,49 @@ Network.responseReceived → Filtering → Queue (background.js:193-234)
   ↓
 Network.loadingFinished → Get Response Body (background.js:236-263)
   ↓
-processCapturedData (background.js:266)
-  ├─ Auto Mode + Whitelisted → downloadFile()
-  └─ Manual Mode or Not Whitelisted → Add to capturedRequests[]
-       ↓
-  chrome.runtime.sendMessage('updateList') → popup.js
-       ↓
-  renderCapturedList() (popup.js:219)
+processCapturedData (background.js:269)
+  ├─ Auto Mode → downloadFile() (Blacklist는 이미 필터링됨)
+  └─ Manual Mode
+       ├─ Whitelisted → downloadFile()
+       └─ New item → Add to capturedRequests[]
+            ↓
+       chrome.runtime.sendMessage('updateList') → popup.js
+            ↓
+       renderCapturedList() (popup.js:219)
 ```
 
-## 필터링 로직 (background.js:193-228)
+## 필터링 로직 (background.js:270-314)
+
+**중요: Race Condition 해결 (v1.1)**
+
+이전 버전에서는 `Network.responseReceived` 이벤트 처리 중 비동기 필터 체크(`await chrome.storage.local.get()`)로 인해 `Network.loadingFinished` 이벤트가 먼저 도착하는 Race Condition이 발생했습니다.
+
+**해결 방법:**
+```javascript
+// 1. Queue에 즉시 추가 (동기)
+pendingRequests.set(requestId, { url, timestamp });
+
+// 2. 비동기 필터 체크
+const settings = await chrome.storage.local.get(...);
+
+// 3. 필터에 걸리면 Queue에서 제거
+if (filtered) {
+  pendingRequests.delete(requestId);
+}
+```
 
 **실행 순서:**
 1. MIME Type 체크 (`response.mimeType.includes('json')`)
 2. HTTP Status 체크 (3xx 리다이렉트, 204/205 제외)
-3. Smart Filter (선택적, 기본값: true)
-4. Blacklist 체크 (차단 패턴)
-5. Whitelist는 다운로드 시점에만 적용 (목록 발견 허용)
+3. **Queue에 즉시 추가** (Race Condition 방지)
+4. Smart Filter (선택적, 기본값: true) - 노이즈 제거
+5. Blacklist 체크 (차단 패턴) - 통과 못하면 Queue에서 제거
+
+**다운로드 시점 로직 (background.js:350-434):**
+- **Auto 모드**: Blacklist 아닌 모든 것 즉시 다운로드
+- **Manual 모드**:
+  - Whitelist 매칭 → 즉시 다운로드
+  - 새로운 항목 → 목록에 추가하여 사용자 선택 대기
 
 ## 주요 설정 (chrome.storage.local)
 
@@ -123,24 +149,55 @@ extension/
    - 초과 시 5개로 긴급 트리밍 (background.js:327)
 
 2. **Whitelist/Blacklist 동작**
-   - Whitelist: Auto 모드에서만 자동 다운로드 트리거
-   - Blacklist: 캡처 자체를 차단
+   - **Auto 모드**: Blacklist 제외 모든 것 자동 다운로드
+   - **Manual 모드**: Whitelist → 자동 다운로드, 새로운 항목 → 목록 추가
+   - Blacklist: 캡처 자체를 차단 (onDebuggerEvent에서 필터링)
    - 목록(List) 탭의 "허용"/"차단" 버튼은 URL pathname 기준으로 작동
 
-3. **Tab 관리**
+3. **Tab 관리 및 자동 재연결 (Auto Re-attach)**
    - Recording ON 시 모든 탭에 Debugger attach 시도
-   - 탭 종료/Refresh 시 자동 재연결 (chrome.tabs.onUpdated, background.js:120)
+   - **Debugger Detach 자동 복구** (background.js:209-245)
+     - 페이지 새로고침/리디렉션 시 자동 재연결
+     - DevTools를 열 때는 충돌 방지를 위해 재연결 안 함
+   - **Service Worker 재시작 대응** (background.js:32-49)
+     - Chrome 재시작/Extension 재로드 시 녹화 상태 복원
+     - Service Worker sleep 후 깨어날 때도 자동 복원
+   - **Tab 활성화 시 상태 확인** (background.js:150-171)
+     - Tab 전환 시 attach 상태 확인 및 재연결
    - `attachedTabs` Set으로 중복 attach 방지
 
 ## 개발 시 주의사항
 
-- **Race Condition**: popup.js와 background.js가 동시에 storage를 수정하면 데이터 손실 가능 → 가능한 한 background.js에서 storage 업데이트 처리
-- **Error Handling**: `chrome.debugger.sendCommand()` 실패 시 "No resource with given identifier found" 에러는 정상 (리다이렉트/캐시된 응답) → background.js:256
-- **Popup 상태 동기화**: popup.js는 `loadSettings()`로 초기화하고, background.js의 `updateList` 메시지로 실시간 업데이트
+- **Race Condition (Network Events)**:
+  - **문제**: `Network.responseReceived`와 `Network.loadingFinished` 이벤트 간 타이밍 이슈
+  - **해결**: Queue 추가를 동기적으로 먼저 실행 (background.js:282-288)
+  - **효과**: Whitelist 항목 안정적으로 다운로드
+
+- **Race Condition (Storage)**:
+  - popup.js와 background.js가 동시에 storage를 수정하면 데이터 손실 가능
+  - 가능한 한 background.js에서 storage 업데이트 처리
+
+- **Error Handling**:
+  - `chrome.debugger.sendCommand()` 실패 시 "No resource with given identifier found" 에러는 정상 (리다이렉트/캐시된 응답)
+  - background.js:338-339에서 처리
+
+- **Popup 상태 동기화**:
+  - popup.js는 `loadSettings()`로 초기화하고, background.js의 `updateList` 메시지로 실시간 업데이트
+
+- **Auto Re-attach 로직**:
+  - `onDebuggerDetach`에서 500ms 딜레이 후 재연결 시도 (안정성)
+  - DevTools 충돌 방지를 위해 `canceled_by_user` reason은 재연결 안 함
+  - Service Worker가 깨어날 때 `attachedTabs.size === 0` 체크로 중복 초기화 방지
+
+- **디버깅 로그**:
+  - 각 단계별 상세 로그 출력 (v1.1에서 추가)
+  - Service Worker 콘솔에서 확인 가능
+  - 프로덕션 배포 시 로그 제거 고려
 
 ## 기능 확장 시 참고
 
-- **새로운 필터 추가**: background.js의 `onDebuggerEvent` 함수 수정 (line 193)
-- **파일명 형식 변경**: `downloadFile` 함수 수정 (line 343)
+- **새로운 필터 추가**: background.js의 `onDebuggerEvent` 함수 수정 (line 247)
+- **파일명 형식 변경**: `downloadFile` 함수 수정 (line 390)
 - **UI 탭 추가**: popup.html에 tab-btn 추가 + popup.js의 tab 이벤트 리스너 자동 처리됨
-- **Storage 스키마 변경**: background.js:8-31의 `onInstalled` 리스너에서 기본값 업데이트 필수
+- **Storage 스키마 변경**: background.js:7-30의 `onInstalled` 리스너에서 기본값 업데이트 필수
+- **Auto Re-attach 로직 수정**: background.js:209-245의 `onDebuggerDetach` 함수 참고

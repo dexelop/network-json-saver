@@ -4,7 +4,6 @@ let attachedTabs = new Set(); // Set of tabIds
 let pendingRequests = new Map(); // requestId -> { url, timestamp }
 
 // Initialize default settings
-// Initialize default settings
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(['isRecording', 'mode', 'smartFilter', 'whitelist', 'blacklist', 'filenamePrefix', 'capturedRequests'], (result) => {
     const defaults = {
@@ -29,6 +28,25 @@ chrome.runtime.onInstalled.addListener(() => {
     }
   });
 });
+
+// Service Worker 시작 시 녹화 상태 복원 (Extension 재로드/Chrome 재시작 대응)
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('[Service Worker] Starting up...');
+  const settings = await chrome.storage.local.get(['isRecording']);
+  if (settings.isRecording) {
+    console.log('[Service Worker] Restoring recording state...');
+    startRecording();
+  }
+});
+
+// Service Worker가 깨어날 때도 상태 복원 시도
+(async function initOnWakeup() {
+  const settings = await chrome.storage.local.get(['isRecording']);
+  if (settings.isRecording && attachedTabs.size === 0) {
+    console.log('[Service Worker] Waking up - restoring recording state...');
+    startRecording();
+  }
+})();
 
 // Listen for storage changes to toggle recording
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -129,6 +147,29 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
+// Tab 활성화 시 attach 상태 확인 및 재연결
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  const settings = await chrome.storage.local.get(['isRecording', 'whitelist']);
+  if (!settings.isRecording) return;
+
+  const tabId = activeInfo.tabId;
+
+  // 이미 attach되어 있으면 스킵
+  if (attachedTabs.has(tabId)) return;
+
+  // Attach 시도
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab && tab.url) {
+      console.log(`[Tab Activated] Tab ${tabId} not attached - attempting attach...`);
+      checkAndAttach(tabId, tab.url, settings.whitelist);
+    }
+  } catch (err) {
+    // Tab이 이미 닫혔거나 접근 불가
+    console.log(`[Tab Activated] Cannot access tab ${tabId}`);
+  }
+});
+
 async function startRecording() {
   const settings = await chrome.storage.local.get(['whitelist']);
   const tabs = await chrome.tabs.query({});
@@ -188,9 +229,42 @@ async function checkAndAttach(tabId, url, whitelist) {
 chrome.debugger.onEvent.addListener(onDebuggerEvent);
 chrome.debugger.onDetach.addListener(onDebuggerDetach);
 
-function onDebuggerDetach(source, reason) {
-  console.log(`Debugger detached from ${source.tabId}:`, reason);
-  attachedTabs.delete(source.tabId);
+async function onDebuggerDetach(source, reason) {
+  const tabId = source.tabId;
+  console.log(`[Detach] Debugger detached from tab ${tabId}, reason: ${reason}`);
+  attachedTabs.delete(tabId);
+
+  // 녹화 중이면 자동 재연결 시도
+  const settings = await chrome.storage.local.get(['isRecording']);
+  if (settings.isRecording) {
+    // 사용자가 DevTools를 열었을 경우는 재연결하지 않음 (충돌 방지)
+    if (reason === 'target_closed' || reason === 'canceled_by_user') {
+      console.log(`[Detach] Tab closed or user canceled - skipping re-attach`);
+      return;
+    }
+
+    // Tab이 여전히 존재하는지 확인
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && tab.url) {
+        console.log(`[Re-attach] Attempting to re-attach to tab ${tabId}...`);
+        // 짧은 딜레이 후 재연결 (안정성)
+        setTimeout(async () => {
+          try {
+            await chrome.debugger.attach({ tabId: tabId }, '1.3');
+            await chrome.debugger.sendCommand({ tabId: tabId }, 'Network.enable');
+            attachedTabs.add(tabId);
+            console.log(`[Re-attach] Successfully re-attached to tab ${tabId}`);
+          } catch (err) {
+            console.error(`[Re-attach] Failed to re-attach to tab ${tabId}:`, err.message);
+          }
+        }, 500);
+      }
+    } catch (err) {
+      // Tab이 닫힌 경우 - 정상
+      console.log(`[Detach] Tab ${tabId} no longer exists`);
+    }
+  }
 }
 
 async function onDebuggerEvent(source, method, params) {
@@ -205,7 +279,15 @@ async function onDebuggerEvent(source, method, params) {
     if (response.status >= 300 && response.status < 400) return; // Redirects
     if (response.status === 204 || response.status === 205) return; // No Content
 
-    // Check filters
+    // CRITICAL FIX: Add to queue IMMEDIATELY to avoid race condition
+    // (loadingFinished can arrive before async filter check completes)
+    console.log(`[Queue] Request queued: ${requestId} (pre-filter)`);
+    pendingRequests.set(requestId, {
+      url: url,
+      timestamp: new Date()
+    });
+
+    // Now do async filter checks and remove from queue if needed
     const settings = await chrome.storage.local.get(['whitelist', 'blacklist', 'smartFilter']);
 
     // Smart Filter (Noise reduction)
@@ -214,36 +296,34 @@ async function onDebuggerEvent(source, method, params) {
       const hit = noiseKeywords.some(k => url.toLowerCase().includes(k));
       if (hit) {
         console.log(`[Skip] Smart Filter hit: ${url}`);
+        pendingRequests.delete(requestId);
         return;
       }
     }
-
-    // Whitelist check removed here to allow discovery in list.
-    // Filtering is now done in processCapturedData.
 
     // Blacklist check
     if (settings.blacklist && settings.blacklist.length > 0) {
       const hit = settings.blacklist.some(b => url.includes(b));
       if (hit) {
         console.log(`[Skip] Blacklist hit: ${url}`);
+        pendingRequests.delete(requestId);
         return;
       }
     }
 
-    console.log(`[Queue] Request queued: ${requestId}`);
-    pendingRequests.set(requestId, {
-      url: url,
-      timestamp: new Date()
-    });
+    console.log(`[Queue] Request ${requestId} passed filters: ${url}`);
 
   } else if (method === 'Network.loadingFinished') {
     const { requestId } = params;
+    console.log(`[LoadingFinished] Request ${requestId} finished`);
     const reqInfo = pendingRequests.get(requestId);
 
     if (reqInfo) {
+      console.log(`[LoadingFinished] Found in pending: ${reqInfo.url}`);
       pendingRequests.delete(requestId);
 
       try {
+        console.log(`[LoadingFinished] Fetching body for: ${reqInfo.url}`);
         const result = await chrome.debugger.sendCommand(
           { tabId: source.tabId },
           'Network.getResponseBody',
@@ -251,23 +331,29 @@ async function onDebuggerEvent(source, method, params) {
         );
 
         if (result.body) {
-          console.log(`[Process] Body received from tab ${source.tabId}`);
+          console.log(`[Process] Body received from tab ${source.tabId}, size: ${result.body.length} bytes`);
           processCapturedData(reqInfo.url, result.body, reqInfo.timestamp);
+        } else {
+          console.warn(`[LoadingFinished] No body in result for: ${reqInfo.url}`);
         }
       } catch (err) {
         // Ignore "No resource with given identifier found" error (common for redirects/cached/preflight)
         if (err.message.includes('No resource with given identifier found') || err.code === -32000) {
-          console.log(`[Debug] Skipped body fetch for ${reqInfo.url} (Resource unavailable)`);
+          console.log(`[Debug] Skipped body fetch for ${reqInfo.url} (Resource unavailable - likely cached/redirected)`);
         } else {
-          console.error(`[Error] Failed to get body:`, err);
+          console.error(`[Error] Failed to get body for ${reqInfo.url}:`, err);
         }
       }
+    } else {
+      console.log(`[LoadingFinished] Request ${requestId} not found in pending queue (probably filtered out earlier)`);
     }
   }
 }
 
 async function processCapturedData(url, body, timestamp) {
+  console.log(`[ProcessData] Processing: ${url}`);
   const settings = await chrome.storage.local.get(['mode', 'filenamePrefix', 'capturedRequests', 'whitelist']);
+  console.log(`[ProcessData] Mode: ${settings.mode}, Whitelist:`, settings.whitelist);
 
   let jsonContent = body;
   try {
@@ -285,65 +371,80 @@ async function processCapturedData(url, body, timestamp) {
       return url.includes(keyword);
     });
   }
+  console.log(`[ProcessData] isWhitelisted: ${isWhitelisted}`);
 
   const isAuto = settings.mode === 'auto';
 
   // Logic:
-  // 1. If Auto Mode AND Whitelisted -> Download immediately (Don't add to list)
-  // 2. If Manual Mode OR Not Whitelisted -> Add to list (for review/discovery)
+  // 1. Auto Mode: Download all (Blacklist already filtered out in onDebuggerEvent)
+  // 2. Manual Mode:
+  //    - Whitelisted -> Download immediately (Don't add to list)
+  //    - New items (not whitelisted, not blacklisted) -> Add to list for review
 
-  if (isAuto && isWhitelisted) {
+  if (isAuto) {
+    // Auto 모드: Blacklist 아닌 모든 것 다운로드
+    console.log(`[Download] Auto mode - downloading: ${url}`);
     downloadFile(url, jsonContent, timestamp, settings.filenamePrefix);
   } else {
-    // Calculate size
-    const sizeBytes = new Blob([jsonContent]).size;
-    let sizeDisplay = sizeBytes + ' B';
-    if (sizeBytes > 1024) {
-      sizeDisplay = (sizeBytes / 1024).toFixed(1) + ' KB';
-    }
+    // Manual 모드
+    if (isWhitelisted) {
+      // Whitelist는 자동 다운로드 (목록 추가 안 함)
+      console.log(`[Download] Manual mode + Whitelisted - downloading: ${url}`);
+      downloadFile(url, jsonContent, timestamp, settings.filenamePrefix);
+    } else {
+      console.log(`[List] Manual mode + Not whitelisted - adding to list: ${url}`);
+      // 새로운 것은 목록에 추가 (Blacklist는 이미 앞단에서 필터링됨)
+      // Calculate size
+      const sizeBytes = new Blob([jsonContent]).size;
+      let sizeDisplay = sizeBytes + ' B';
+      if (sizeBytes > 1024) {
+        sizeDisplay = (sizeBytes / 1024).toFixed(1) + ' KB';
+      }
 
-    const newRequest = {
-      url: url,
-      content: jsonContent,
-      timestamp: timestamp.toISOString(),
-      autoSaved: false,
-      size: sizeDisplay
-    };
+      const newRequest = {
+        url: url,
+        content: jsonContent,
+        timestamp: timestamp.toISOString(),
+        autoSaved: false,
+        size: sizeDisplay
+      };
 
-    let updatedList = [...(settings.capturedRequests || []), newRequest];
+      let updatedList = [...(settings.capturedRequests || []), newRequest];
 
-    // Limit list size (reduce from 50 to 20 to save space)
-    const MAX_ITEMS = 20;
-    if (updatedList.length > MAX_ITEMS) {
-      updatedList = updatedList.slice(updatedList.length - MAX_ITEMS);
-    }
+      // Limit list size (reduce from 50 to 20 to save space)
+      const MAX_ITEMS = 20;
+      if (updatedList.length > MAX_ITEMS) {
+        updatedList = updatedList.slice(updatedList.length - MAX_ITEMS);
+      }
 
-    try {
-      await chrome.storage.local.set({ capturedRequests: updatedList });
-      chrome.runtime.sendMessage({ action: 'updateList', data: updatedList }).catch(() => {
-        // Ignore error if popup is closed
-      });
-    } catch (err) {
-      if (err.message.includes('Quota exceeded')) {
-        console.warn('[Storage] Quota exceeded. Trimming list...');
-        // Emergency trim: keep only last 5 items
-        updatedList = updatedList.slice(updatedList.length - 5);
-        try {
-          await chrome.storage.local.set({ capturedRequests: updatedList });
-          chrome.runtime.sendMessage({ action: 'updateList', data: updatedList }).catch(() => { });
-        } catch (retryErr) {
-          console.error('[Storage] Critical: Failed to save even after trimming.', retryErr);
-          // If still failing, clear list to restore functionality
-          await chrome.storage.local.set({ capturedRequests: [] });
+      try {
+        await chrome.storage.local.set({ capturedRequests: updatedList });
+        chrome.runtime.sendMessage({ action: 'updateList', data: updatedList }).catch(() => {
+          // Ignore error if popup is closed
+        });
+      } catch (err) {
+        if (err.message.includes('Quota exceeded')) {
+          console.warn('[Storage] Quota exceeded. Trimming list...');
+          // Emergency trim: keep only last 5 items
+          updatedList = updatedList.slice(updatedList.length - 5);
+          try {
+            await chrome.storage.local.set({ capturedRequests: updatedList });
+            chrome.runtime.sendMessage({ action: 'updateList', data: updatedList }).catch(() => { });
+          } catch (retryErr) {
+            console.error('[Storage] Critical: Failed to save even after trimming.', retryErr);
+            // If still failing, clear list to restore functionality
+            await chrome.storage.local.set({ capturedRequests: [] });
+          }
+        } else {
+          console.error('[Storage] Save failed:', err);
         }
-      } else {
-        console.error('[Storage] Save failed:', err);
       }
     }
   }
 }
 
 function downloadFile(url, content, timestamp, prefix) {
+  console.log(`[DownloadFile] Starting download for: ${url}`);
   // Filename generation
   const date = new Date(timestamp);
   const dateStr = date.getFullYear() +
@@ -378,10 +479,17 @@ function downloadFile(url, content, timestamp, prefix) {
   const blob = new Blob([content], { type: 'application/json' });
   const reader = new FileReader();
   reader.onload = function () {
+    console.log(`[DownloadFile] Calling chrome.downloads.download for: ${filename}`);
     chrome.downloads.download({
       url: reader.result,
       filename: filename,
       saveAs: false
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        console.error(`[DownloadFile] Failed to download ${filename}:`, chrome.runtime.lastError);
+      } else {
+        console.log(`[DownloadFile] Successfully initiated download: ${filename} (ID: ${downloadId})`);
+      }
     });
   };
   reader.readAsDataURL(blob);
