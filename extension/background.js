@@ -332,9 +332,13 @@ async function onDebuggerEvent(source, method, params) {
         // Keep full URL if parsing fails
       }
 
-      const matchedPattern = settings.blacklist.find(pattern => matchPattern(pathname, pattern));
-      if (matchedPattern) {
-        console.log(`[Filter] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched pathname: ${pathname}`);
+      const matchedItem = settings.blacklist.find(item => {
+        const pattern = typeof item === 'string' ? item : item.keyword;
+        return matchPattern(pathname, pattern);
+      });
+      if (matchedItem) {
+        const pattern = typeof matchedItem === 'string' ? matchedItem : matchedItem.keyword;
+        console.log(`[Filter] ✅ Blacklist hit! Pattern: "${pattern}" matched pathname: ${pathname}`);
         pendingRequests.delete(requestId);
         return;
       }
@@ -396,9 +400,13 @@ async function processCapturedData(url, body, timestamp) {
       // Keep full URL if parsing fails
     }
 
-    const matchedPattern = settings.blacklist.find(pattern => matchPattern(pathname, pattern));
-    if (matchedPattern) {
-      console.log(`[ProcessData] ✅ Blacklist hit! Pattern: "${matchedPattern}" matched pathname: ${pathname}`);
+    const matchedItem = settings.blacklist.find(item => {
+      const pattern = typeof item === 'string' ? item : item.keyword;
+      return matchPattern(pathname, pattern);
+    });
+    if (matchedItem) {
+      const pattern = typeof matchedItem === 'string' ? matchedItem : matchedItem.keyword;
+      console.log(`[ProcessData] ✅ Blacklist hit! Pattern: "${pattern}" matched pathname: ${pathname}`);
       return; // Skip this request
     }
     console.log(`[ProcessData] ❌ No blacklist match for pathname: ${pathname}`);
