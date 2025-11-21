@@ -228,29 +228,68 @@ document.addEventListener('DOMContentLoaded', () => {
         const container = type === 'whitelist' ? whitelistItems : blacklistItems;
         container.innerHTML = '';
 
-        state[type].forEach(item => {
+        state[type].forEach((item, index) => {
             const li = document.createElement('li');
             li.className = 'tag-item';
 
             let displayValue = item;
             let keyword = item;
+            let memo = '';
             let memoHtml = '';
 
             if (typeof item === 'object') {
                 keyword = item.keyword;
                 displayValue = item.keyword;
-                if (item.memo) {
-                    memoHtml = `<span class="tag-memo">(${item.memo})</span>`;
+                memo = item.memo || '';
+                if (memo) {
+                    memoHtml = `<span class="tag-memo">(${memo})</span>`;
                 }
             }
 
             li.innerHTML = `
         <span class="tag-text">${displayValue} ${memoHtml}</span>
-        <span class="remove-tag" title="삭제">&times;</span>
+        <span class="tag-actions">
+            <span class="edit-tag" title="수정">✎</span>
+            <span class="remove-tag" title="삭제">&times;</span>
+        </span>
 `;
+            li.querySelector('.edit-tag').addEventListener('click', () => editTag(type, index, keyword, memo));
             li.querySelector('.remove-tag').addEventListener('click', () => removeTag(type, keyword));
             container.appendChild(li);
         });
+    }
+
+    function editTag(type, index, currentKeyword, currentMemo) {
+        const newKeyword = prompt(`키워드 수정 (${type === 'whitelist' ? 'Whitelist' : 'Blacklist'}):`, currentKeyword);
+
+        if (newKeyword === null) return; // 취소
+        if (!newKeyword.trim()) {
+            alert('키워드는 비워둘 수 없습니다.');
+            return;
+        }
+
+        // 중복 체크 (자기 자신 제외)
+        const isDuplicate = state[type].some((item, i) => {
+            if (i === index) return false;
+            const existing = typeof item === 'string' ? item : item.keyword;
+            return existing === newKeyword.trim();
+        });
+
+        if (isDuplicate) {
+            alert('이미 존재하는 키워드입니다.');
+            return;
+        }
+
+        const newMemo = prompt('메모 (선택사항, 파일명에 추가됨):', currentMemo);
+
+        // 업데이트
+        state[type][index] = {
+            keyword: newKeyword.trim(),
+            memo: newMemo ? newMemo.trim() : ''
+        };
+
+        saveSettings();
+        renderTags(type);
     }
 
     function renderCapturedList() {

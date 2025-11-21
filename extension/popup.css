@@ -172,11 +172,30 @@ input[type="text"] {
   margin-top: 5px;
 }
 
+.tag-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.edit-tag {
+  cursor: pointer;
+  color: #2196F3;
+  font-size: 14px;
+}
+
+.edit-tag:hover {
+  color: #0b7dda;
+}
+
 .remove-tag {
   cursor: pointer;
   color: #f44336;
-  margin-left: 8px;
   font-weight: bold;
+}
+
+.remove-tag:hover {
+  color: #da190b;
 }
 
 #captured-list {}

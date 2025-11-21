@@ -413,7 +413,7 @@ async function processCapturedData(url, body, timestamp) {
   }
 
   // Check Whitelist with wildcard support
-  let isWhitelisted = false;
+  let matchedWhitelistItem = null;
   let pathname = url;
   try {
     pathname = new URL(url).pathname;
@@ -422,12 +422,14 @@ async function processCapturedData(url, body, timestamp) {
   }
 
   if (settings.whitelist && settings.whitelist.length > 0) {
-    isWhitelisted = settings.whitelist.some(w => {
+    matchedWhitelistItem = settings.whitelist.find(w => {
       const pattern = typeof w === 'string' ? w : w.keyword;
       return matchPattern(pathname, pattern);
     });
   }
-  console.log(`[ProcessData] isWhitelisted: ${isWhitelisted} (pathname: ${pathname})`);
+  const isWhitelisted = !!matchedWhitelistItem;
+  const whitelistMemo = matchedWhitelistItem ? (matchedWhitelistItem.memo || '') : '';
+  console.log(`[ProcessData] isWhitelisted: ${isWhitelisted}, memo: "${whitelistMemo}" (pathname: ${pathname})`);
 
   const isAuto = settings.mode === 'auto';
 
@@ -440,13 +442,13 @@ async function processCapturedData(url, body, timestamp) {
   if (isAuto) {
     // Auto 모드: Blacklist 아닌 모든 것 다운로드
     console.log(`[Download] Auto mode - downloading: ${url}`);
-    downloadFile(url, jsonContent, timestamp, settings.filenamePrefix);
+    downloadFile(url, jsonContent, timestamp, settings.filenamePrefix, whitelistMemo);
   } else {
     // Manual 모드
     if (isWhitelisted) {
       // Whitelist는 자동 다운로드 (목록 추가 안 함)
       console.log(`[Download] Manual mode + Whitelisted - downloading: ${url}`);
-      downloadFile(url, jsonContent, timestamp, settings.filenamePrefix);
+      downloadFile(url, jsonContent, timestamp, settings.filenamePrefix, whitelistMemo);
     } else {
       console.log(`[List] Manual mode + Not whitelisted - adding to list: ${url}`);
 
@@ -508,8 +510,8 @@ async function processCapturedData(url, body, timestamp) {
   }
 }
 
-function downloadFile(url, content, timestamp, prefix) {
-  console.log(`[DownloadFile] Starting download for: ${url}`);
+function downloadFile(url, content, timestamp, prefix, suffix = '') {
+  console.log(`[DownloadFile] Starting download for: ${url}, suffix: "${suffix}"`);
   // Filename generation
   const date = new Date(timestamp);
   const dateStr = date.getFullYear() +
@@ -533,10 +535,19 @@ function downloadFile(url, content, timestamp, prefix) {
     urlSlug = 'url';
   }
 
-  // Sanitize
+  // Sanitize urlSlug
   urlSlug = urlSlug.replace(/[^a-zA-Z0-9-_]/g, '');
 
-  let filename = `${dateStr}_${urlSlug}.json`;
+  // Sanitize suffix (memo) - allow Korean and alphanumeric
+  let sanitizedSuffix = '';
+  if (suffix) {
+    sanitizedSuffix = suffix.replace(/[\\/:*?"<>|]/g, '').trim();
+    if (sanitizedSuffix) {
+      sanitizedSuffix = '_' + sanitizedSuffix;
+    }
+  }
+
+  let filename = `${dateStr}_${urlSlug}${sanitizedSuffix}.json`;
   if (prefix) {
     filename = `${prefix}_${filename}`;
   }
